@@ -43,6 +43,89 @@
       animation: rise 420ms ease-out;
     }
 
+    .control-shell {
+      width: min(560px, 100%);
+      opacity: 0;
+      transform: translateY(12px) scale(0.985);
+      transition: opacity 360ms ease, transform 360ms ease;
+      pointer-events: none;
+    }
+
+    .control-shell.ready {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .stinger {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 15% 20%, rgba(82, 148, 236, 0.35), transparent 35%),
+        radial-gradient(circle at 80% 82%, rgba(255, 143, 31, 0.35), transparent 40%),
+        linear-gradient(145deg, #0f2a4d, #122847 45%, #173a66);
+      transition: opacity 520ms ease, visibility 520ms ease;
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .stinger.hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .stinger::before,
+    .stinger::after {
+      content: "";
+      position: absolute;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.16);
+      animation: pulse-ring 1.6s ease-out infinite;
+    }
+
+    .stinger::before {
+      width: 36vmin;
+      height: 36vmin;
+      animation-delay: 0.2s;
+    }
+
+    .stinger::after {
+      width: 52vmin;
+      height: 52vmin;
+      animation-delay: 0.55s;
+    }
+
+    .stinger-title {
+      margin: 0;
+      padding: 0 24px;
+      text-align: center;
+      font-size: clamp(2rem, 8vw, 4.4rem);
+      letter-spacing: 0.04em;
+      color: #ffffff;
+      text-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+      transform: translateY(10px) scale(0.96);
+      animation: stinger-title-in 760ms cubic-bezier(.2,.8,.2,1) forwards;
+    }
+
+    .stinger-subtitle {
+      margin: 12px 0 0;
+      padding: 0 24px;
+      text-align: center;
+      max-width: 720px;
+      font-size: clamp(1rem, 2.7vw, 1.35rem);
+      line-height: 1.35;
+      color: rgba(255, 255, 255, 0.92);
+      text-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      transform: translateY(8px);
+      animation: stinger-subtitle-in 640ms ease forwards;
+      animation-delay: 380ms;
+    }
+
     h1 {
       margin: 0 0 8px;
       font-size: clamp(1.5rem, 4vw, 2rem);
@@ -164,6 +247,21 @@
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
+    @keyframes stinger-title-in {
+      from { opacity: 0; transform: translateY(14px) scale(0.95); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes stinger-subtitle-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse-ring {
+      from { opacity: 0.5; transform: scale(0.84); }
+      to { opacity: 0; transform: scale(1.2); }
+    }
+
     @media (max-width: 430px) {
       .panel { padding: 18px; border-radius: 18px; }
       .controls { gap: 10px; }
@@ -172,7 +270,15 @@
   </style>
 </head>
 <body>
-  <main class="panel">
+  <section class="stinger" id="welcome-stinger" aria-label="Welcome animation">
+    <div>
+      <h2 class="stinger-title">Welcome Player!</h2>
+      <p class="stinger-subtitle">Leadership without teamwork lacks effectiveness</p>
+    </div>
+  </section>
+
+  <main class="control-shell" id="control-shell">
+    <div class="panel">
     <h1>VoteBot Direction Controls</h1>
     <p class="status">
       Last action: <strong>{{ last_action }}</strong>
@@ -207,9 +313,12 @@
 
     <p class="hint">Each button sends a direction command over WebSocket.</p>
     <div class="status-chip" id="ws-status"><span class="dot" aria-hidden="true"></span><span>Connecting...</span></div>
+    </div>
   </main>
 
   <script>
+    const stingerEl = document.querySelector("#welcome-stinger");
+    const controlShellEl = document.querySelector("#control-shell");
     const statusText = document.querySelector("#ws-status span:last-child");
     const countdownEl = document.querySelector("#tally-countdown");
     const tallyFillEl = document.querySelector("#tally-fill");
@@ -218,6 +327,11 @@
     let nextTallyAtMs = null;
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
+
+    setTimeout(() => {
+      stingerEl.classList.add("hidden");
+      controlShellEl.classList.add("ready");
+    }, 3700);
 
     function renderCountdown() {
       if (!nextTallyAtMs) {
