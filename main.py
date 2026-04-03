@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from time import monotonic
 
@@ -28,14 +28,14 @@ PAGE_TEMPLATE = """
   <title>VoteBot Controls</title>
   <style>
     :root {
-      --bg-a: #f9f7f1;
-      --bg-b: #e8f1ea;
-      --ink: #223127;
-      --muted: #516357;
-      --accent: #1f8a4c;
-      --accent-2: #1a6c3d;
+      --bg-a: #eef6ff;
+      --bg-b: #dceaff;
+      --ink: #122847;
+      --muted: #4e6180;
+      --accent: #ff8f1f;
+      --accent-2: #e17100;
       --card: rgba(255, 255, 255, 0.9);
-      --ring: rgba(31, 138, 76, 0.35);
+      --ring: rgba(255, 143, 31, 0.35);
     }
 
     * { box-sizing: border-box; }
@@ -48,8 +48,8 @@ PAGE_TEMPLATE = """
       font-family: "Segoe UI", "Trebuchet MS", Tahoma, sans-serif;
       color: var(--ink);
       background:
-        radial-gradient(circle at 15% 10%, rgba(31, 138, 76, 0.16), transparent 40%),
-        radial-gradient(circle at 85% 90%, rgba(250, 154, 27, 0.20), transparent 45%),
+        radial-gradient(circle at 15% 10%, rgba(27, 101, 198, 0.20), transparent 40%),
+        radial-gradient(circle at 85% 90%, rgba(255, 143, 31, 0.22), transparent 45%),
         linear-gradient(135deg, var(--bg-a), var(--bg-b));
       padding: 24px;
     }
@@ -105,24 +105,24 @@ PAGE_TEMPLATE = """
       letter-spacing: 0.01em;
       color: #ffffff;
       background: linear-gradient(180deg, var(--accent), var(--accent-2));
-      box-shadow: 0 10px 18px rgba(31, 138, 76, 0.25);
+      box-shadow: 0 10px 18px rgba(225, 113, 0, 0.28);
       transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
       outline: none;
     }
 
     button:hover {
       transform: translateY(-2px);
-      box-shadow: 0 14px 24px rgba(31, 138, 76, 0.30);
+      box-shadow: 0 14px 24px rgba(225, 113, 0, 0.34);
       filter: saturate(1.05);
     }
 
     button:active {
       transform: translateY(0);
-      box-shadow: 0 6px 12px rgba(31, 138, 76, 0.20);
+      box-shadow: 0 6px 12px rgba(225, 113, 0, 0.24);
     }
 
     button:focus-visible {
-      box-shadow: 0 0 0 4px var(--ring), 0 10px 18px rgba(31, 138, 76, 0.25);
+      box-shadow: 0 0 0 4px var(--ring), 0 10px 18px rgba(225, 113, 0, 0.26);
     }
 
     .hint {
@@ -138,8 +138,8 @@ PAGE_TEMPLATE = """
       gap: 8px;
       padding: 8px 12px;
       border-radius: 999px;
-      background: rgba(31, 138, 76, 0.12);
-      color: #1d5b38;
+      background: rgba(27, 101, 198, 0.14);
+      color: #134a96;
       font-size: 0.88rem;
       font-weight: 600;
     }
@@ -148,8 +148,8 @@ PAGE_TEMPLATE = """
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #2a9d59;
-      box-shadow: 0 0 0 4px rgba(42, 157, 89, 0.16);
+      background: #ff8f1f;
+      box-shadow: 0 0 0 4px rgba(255, 143, 31, 0.22);
     }
 
     @keyframes rise {
@@ -253,8 +253,32 @@ PAGE_TEMPLATE = """
 """
 
 
+def _nth_weekday_of_month(year: int, month: int, weekday: int, n: int) -> datetime:
+    first_day = datetime(year, month, 1, tzinfo=timezone.utc)
+    days_until_weekday = (weekday - first_day.weekday()) % 7
+    day = 1 + days_until_weekday + (n - 1) * 7
+    return datetime(year, month, day, tzinfo=timezone.utc)
+
+
+def _is_us_eastern_dst(now_utc: datetime) -> bool:
+    year = now_utc.year
+    # DST starts: 2nd Sunday in March at 2:00 AM EST (07:00 UTC)
+    march_second_sunday = _nth_weekday_of_month(year, 3, 6, 2)
+    dst_start_utc = march_second_sunday.replace(hour=7)
+    # DST ends: 1st Sunday in November at 2:00 AM EDT (06:00 UTC)
+    nov_first_sunday = _nth_weekday_of_month(year, 11, 6, 1)
+    dst_end_utc = nov_first_sunday.replace(hour=6)
+    return dst_start_utc <= now_utc < dst_end_utc
+
+
 def _stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    now_utc = datetime.now(timezone.utc)
+    if _is_us_eastern_dst(now_utc):
+        edt = timezone(timedelta(hours=-4), name="EDT")
+        return now_utc.astimezone(edt).strftime("%Y-%m-%d %H:%M:%S EDT")
+
+    est = timezone(timedelta(hours=-5), name="EST")
+    return now_utc.astimezone(est).strftime("%Y-%m-%d %H:%M:%S EST")
 
 
 @app.get("/")
