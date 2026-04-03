@@ -14,6 +14,7 @@ sock = Sock(app)
 ALLOWED_DIRECTIONS = {"forward", "backward", "left", "right"}
 last_action = "None"
 last_action_at = "Never"
+active_ws_connections = 0
 state_lock = Lock()
 
 PAGE_TEMPLATE = """
@@ -168,6 +169,8 @@ PAGE_TEMPLATE = """
       Last action: <strong>{{ last_action }}</strong>
       <br>
       Time: <strong>{{ last_action_at }}</strong>
+      <br>
+      Total concurrent WS connections: <strong id="ws-count">{{ active_ws_connections }}</strong>
     </p>
 
     <section class="controls" aria-label="Directional controls">
@@ -206,14 +209,24 @@ PAGE_TEMPLATE = """
         const payload = JSON.parse(event.data);
         if (payload.ok) {
           const actionEl = document.querySelector(".status strong:first-of-type");
-          const timeEl = document.querySelector(".status strong:last-of-type");
+          const timeEl = document.querySelector(".status strong:nth-of-type(2)");
+          const countEl = document.querySelector("#ws-count");
           actionEl.textContent = payload.last_action;
           timeEl.textContent = payload.last_action_at;
+          if (typeof payload.active_ws_connections === "number") {
+            countEl.textContent = payload.active_ws_connections;
+          }
         }
       } catch {
         // Ignore malformed payloads from development changes.
       }
     });
+
+    setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "status" }));
+      }
+    }, 1000);
 
     document.querySelectorAll("button[data-direction]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -240,6 +253,7 @@ def index() -> str:
         PAGE_TEMPLATE,
         last_action=last_action,
         last_action_at=last_action_at,
+    active_ws_connections=active_ws_connections,
     )
 
 
@@ -258,46 +272,50 @@ def _apply_direction(direction: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _state_payload() -> dict[str, object]:
+    with state_lock:
+        return {
+            "ok": True,
+            "last_action": last_action,
+            "last_action_at": last_action_at,
+            "active_ws_connections": active_ws_connections,
+        }
+
+
 @sock.route("/ws")
 def ws_controls(ws) -> None:
+    global active_ws_connections
+
     with state_lock:
-        ws.send(
-            json.dumps(
-                {
-                    "ok": True,
-                    "last_action": last_action,
-                    "last_action_at": last_action_at,
-                }
-            )
-        )
+        active_ws_connections += 1
+    ws.send(json.dumps(_state_payload()))
 
-    while True:
-        message = ws.receive()
-        if message is None:
-            break
+    try:
+        while True:
+            message = ws.receive()
+            if message is None:
+                break
 
-        try:
-            payload = json.loads(message)
-        except json.JSONDecodeError:
-            ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
-            continue
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
+                continue
 
-        direction = str(payload.get("direction", ""))
-        ok, error = _apply_direction(direction)
-        if not ok:
-            ws.send(json.dumps({"ok": False, "error": error}))
-            continue
+            if payload.get("type") == "status":
+                ws.send(json.dumps(_state_payload()))
+                continue
 
+            direction = str(payload.get("direction", ""))
+            ok, error = _apply_direction(direction)
+            if not ok:
+                ws.send(json.dumps({"ok": False, "error": error}))
+                continue
+
+            ws.send(json.dumps(_state_payload()))
+    finally:
         with state_lock:
-            ws.send(
-                json.dumps(
-                    {
-                        "ok": True,
-                        "last_action": last_action,
-                        "last_action_at": last_action_at,
-                    }
-                )
-            )
+            active_ws_connections = max(0, active_ws_connections - 1)
 
 
 if __name__ == "__main__":
