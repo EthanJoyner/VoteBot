@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
-from time import monotonic
+from time import monotonic, time
 
 from flask import Flask, render_template_string
 from flask_sock import Sock
@@ -20,6 +20,7 @@ last_action_at = "Never"
 active_ws_connections = 0
 interval_votes = {direction: 0 for direction in ALLOWED_DIRECTIONS}
 interval_result = "Waiting for first interval..."
+next_tally_at_epoch = time() + VOTE_INTERVAL_SECONDS
 connected_ws_clients: set = set()
 state_lock = Lock()
 
@@ -179,6 +180,8 @@ PAGE_TEMPLATE = """
       Total concurrent WS connections: <strong id="ws-count">{{ active_ws_connections }}</strong>
       <br>
       5s interval result: <strong id="interval-result">{{ interval_result }}</strong>
+      <br>
+      Next tally in: <strong id="tally-countdown">{{ initial_countdown }}</strong>
     </p>
 
     <section class="controls" aria-label="Directional controls">
@@ -201,8 +204,20 @@ PAGE_TEMPLATE = """
 
   <script>
     const statusText = document.querySelector("#ws-status span:last-child");
+    const countdownEl = document.querySelector("#tally-countdown");
+    let nextTallyAtMs = null;
     const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
+
+    function renderCountdown() {
+      if (!nextTallyAtMs) {
+        countdownEl.textContent = "--.-s";
+        return;
+      }
+
+      const secondsRemaining = Math.max(0, (nextTallyAtMs - Date.now()) / 1000);
+      countdownEl.textContent = `${secondsRemaining.toFixed(1)}s`;
+    }
 
     function setStatus(message) {
       statusText.textContent = message;
@@ -228,6 +243,10 @@ PAGE_TEMPLATE = """
           if (typeof payload.interval_result === "string") {
             intervalEl.textContent = payload.interval_result;
           }
+          if (typeof payload.next_tally_at_epoch_ms === "number") {
+            nextTallyAtMs = payload.next_tally_at_epoch_ms;
+            renderCountdown();
+          }
         } else if (payload.error) {
           setStatus(payload.error);
         }
@@ -235,6 +254,8 @@ PAGE_TEMPLATE = """
         // Ignore malformed payloads from development changes.
       }
     });
+
+    setInterval(renderCountdown, 100);
 
     setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -293,12 +314,16 @@ def _stamp() -> str:
 
 @app.get("/")
 def index() -> str:
+  now = time()
+  with state_lock:
+    countdown = max(0.0, next_tally_at_epoch - now)
     return render_template_string(
         PAGE_TEMPLATE,
         last_action=last_action,
         last_action_at=last_action_at,
     active_ws_connections=active_ws_connections,
     interval_result=interval_result,
+    initial_countdown=f"{countdown:.1f}s",
     )
 
 
@@ -323,8 +348,9 @@ def _state_payload() -> dict[str, object]:
             "ok": True,
             "last_action": last_action,
             "last_action_at": last_action_at,
-            "active_ws_connections": active_ws_connections,
+      "active_ws_connections": active_ws_connections,
       "interval_result": interval_result,
+      "next_tally_at_epoch_ms": int(next_tally_at_epoch * 1000),
         }
 
 
@@ -347,12 +373,13 @@ def _broadcast_payload(payload: dict[str, object]) -> None:
 
 
 def _evaluate_interval_votes() -> dict[str, object]:
-  global interval_result
+  global interval_result, next_tally_at_epoch
 
   with state_lock:
     snapshot = dict(interval_votes)
     for direction in interval_votes:
       interval_votes[direction] = 0
+    next_tally_at_epoch = time() + VOTE_INTERVAL_SECONDS
 
   highest_vote_count = max(snapshot.values())
   if highest_vote_count == 0:
