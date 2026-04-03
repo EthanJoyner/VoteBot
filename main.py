@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from threading import Lock
+from threading import Event, Lock, Thread
 from time import monotonic
 
 from flask import Flask, render_template_string
@@ -14,9 +14,13 @@ sock = Sock(app)
 
 ALLOWED_DIRECTIONS = {"forward", "backward", "left", "right"}
 COOLDOWN_SECONDS = 1.0
+VOTE_INTERVAL_SECONDS = 5.0
 last_action = "None"
 last_action_at = "Never"
 active_ws_connections = 0
+interval_votes = {direction: 0 for direction in ALLOWED_DIRECTIONS}
+interval_result = "Waiting for first interval..."
+connected_ws_clients: set = set()
 state_lock = Lock()
 
 PAGE_TEMPLATE = """
@@ -173,6 +177,8 @@ PAGE_TEMPLATE = """
       Time: <strong>{{ last_action_at }}</strong>
       <br>
       Total concurrent WS connections: <strong id="ws-count">{{ active_ws_connections }}</strong>
+      <br>
+      5s interval result: <strong id="interval-result">{{ interval_result }}</strong>
     </p>
 
     <section class="controls" aria-label="Directional controls">
@@ -213,10 +219,14 @@ PAGE_TEMPLATE = """
           const actionEl = document.querySelector(".status strong:first-of-type");
           const timeEl = document.querySelector(".status strong:nth-of-type(2)");
           const countEl = document.querySelector("#ws-count");
+          const intervalEl = document.querySelector("#interval-result");
           actionEl.textContent = payload.last_action;
           timeEl.textContent = payload.last_action_at;
           if (typeof payload.active_ws_connections === "number") {
             countEl.textContent = payload.active_ws_connections;
+          }
+          if (typeof payload.interval_result === "string") {
+            intervalEl.textContent = payload.interval_result;
           }
         } else if (payload.error) {
           setStatus(payload.error);
@@ -288,6 +298,7 @@ def index() -> str:
         last_action=last_action,
         last_action_at=last_action_at,
     active_ws_connections=active_ws_connections,
+    interval_result=interval_result,
     )
 
 
@@ -313,66 +324,143 @@ def _state_payload() -> dict[str, object]:
             "last_action": last_action,
             "last_action_at": last_action_at,
             "active_ws_connections": active_ws_connections,
+      "interval_result": interval_result,
         }
+
+
+def _broadcast_payload(payload: dict[str, object]) -> None:
+  with state_lock:
+    clients = list(connected_ws_clients)
+
+  stale_clients = []
+  serialized = json.dumps(payload)
+  for client in clients:
+    try:
+      client.send(serialized)
+    except Exception:
+      stale_clients.append(client)
+
+  if stale_clients:
+    with state_lock:
+      for client in stale_clients:
+        connected_ws_clients.discard(client)
+
+
+def _evaluate_interval_votes() -> dict[str, object]:
+  global interval_result
+
+  with state_lock:
+    snapshot = dict(interval_votes)
+    for direction in interval_votes:
+      interval_votes[direction] = 0
+
+  highest_vote_count = max(snapshot.values())
+  if highest_vote_count == 0:
+    interval_result = "No votes this interval. No action can be taken."
+    return {
+      "ok": True,
+      "interval_result": interval_result,
+      "interval_votes": snapshot,
+      "winning_direction": None,
+    }
+
+  leaders = [direction for direction, votes in snapshot.items() if votes == highest_vote_count]
+  if len(leaders) > 1:
+    interval_result = (
+      "No action can be taken. "
+      f"Tie at {highest_vote_count} vote(s): {', '.join(sorted(leaders))}."
+    )
+    return {
+      "ok": True,
+      "interval_result": interval_result,
+      "interval_votes": snapshot,
+      "winning_direction": None,
+    }
+
+  winner = leaders[0]
+  interval_result = f"{winner.capitalize()} had the most votes with {highest_vote_count}."
+  return {
+    "ok": True,
+    "interval_result": interval_result,
+    "interval_votes": snapshot,
+    "winning_direction": winner,
+  }
+
+
+def _vote_interval_worker(stop_event: Event) -> None:
+  while not stop_event.wait(VOTE_INTERVAL_SECONDS):
+    payload = _evaluate_interval_votes()
+    _broadcast_payload(payload)
 
 
 @sock.route("/ws")
 def ws_controls(ws) -> None:
-  global active_ws_connections
-  cooldown_by_direction: dict[str, float] = {}
+    global active_ws_connections
+    cooldown_by_direction: dict[str, float] = {}
 
-  with state_lock:
-    active_ws_connections += 1
-  ws.send(json.dumps(_state_payload()))
-
-  try:
-    while True:
-      message = ws.receive()
-      if message is None:
-        break
-
-      try:
-        payload = json.loads(message)
-      except json.JSONDecodeError:
-        ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
-        continue
-
-      if payload.get("type") == "status":
-        ws.send(json.dumps(_state_payload()))
-        continue
-
-      direction = str(payload.get("direction", ""))
-      if direction in ALLOWED_DIRECTIONS:
-        now = monotonic()
-        last_press = cooldown_by_direction.get(direction, 0.0)
-        elapsed = now - last_press
-        if elapsed < COOLDOWN_SECONDS:
-          ws.send(
-            json.dumps(
-              {
-                "ok": False,
-                "error": (
-                  f"{direction.capitalize()} is on cooldown. "
-                  f"Try again in {COOLDOWN_SECONDS - elapsed:.2f}s"
-                ),
-              }
-            )
-          )
-          continue
-
-      ok, error = _apply_direction(direction)
-      if not ok:
-        ws.send(json.dumps({"ok": False, "error": error}))
-        continue
-
-      cooldown_by_direction[direction] = monotonic()
-      ws.send(json.dumps(_state_payload()))
-  finally:
     with state_lock:
-      active_ws_connections = max(0, active_ws_connections - 1)
+        active_ws_connections += 1
+        connected_ws_clients.add(ws)
+    ws.send(json.dumps(_state_payload()))
+
+    try:
+        while True:
+            message = ws.receive()
+            if message is None:
+                break
+
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
+                continue
+
+            if payload.get("type") == "status":
+                ws.send(json.dumps(_state_payload()))
+                continue
+
+            direction = str(payload.get("direction", ""))
+            if direction in ALLOWED_DIRECTIONS:
+                now = monotonic()
+                last_press = cooldown_by_direction.get(direction, 0.0)
+                elapsed = now - last_press
+                if elapsed < COOLDOWN_SECONDS:
+                    ws.send(
+                        json.dumps(
+                            {
+                                "ok": False,
+                                "error": (
+                                    f"{direction.capitalize()} is on cooldown. "
+                                    f"Try again in {COOLDOWN_SECONDS - elapsed:.2f}s"
+                                ),
+                            }
+                        )
+                    )
+                    continue
+
+            ok, error = _apply_direction(direction)
+            if not ok:
+                ws.send(json.dumps({"ok": False, "error": error}))
+                continue
+
+            with state_lock:
+                interval_votes[direction] += 1
+
+            cooldown_by_direction[direction] = monotonic()
+            ws.send(json.dumps(_state_payload()))
+    finally:
+        with state_lock:
+            connected_ws_clients.discard(ws)
+            active_ws_connections = max(0, active_ws_connections - 1)
 
 
 if __name__ == "__main__":
     host = os.getenv("VOTEBOT_HOST", "0.0.0.0")
     port = int(os.getenv("VOTEBOT_PORT", "5000"))
-    app.run(host=host, port=port, debug=False)
+    worker_stop_event = Event()
+    worker = Thread(target=_vote_interval_worker, args=(worker_stop_event,), daemon=True)
+    worker.start()
+    try:
+        app.run(host=host, port=port, debug=False)
+    finally:
+        worker_stop_event.set()
