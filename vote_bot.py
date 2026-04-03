@@ -212,7 +212,7 @@ async def startup():
 if __name__ == "__main__":
     uvicorn.run(
         "vote_bot:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=int(os.getenv("VOTEBOT_PORT", "5000")),
         log_level="info",
     )
