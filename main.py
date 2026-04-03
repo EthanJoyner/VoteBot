@@ -4,6 +4,7 @@ import json
 import os
 from datetime import datetime, timezone
 from threading import Lock
+from time import monotonic
 
 from flask import Flask, render_template_string
 from flask_sock import Sock
@@ -12,6 +13,7 @@ app = Flask(__name__)
 sock = Sock(app)
 
 ALLOWED_DIRECTIONS = {"forward", "backward", "left", "right"}
+COOLDOWN_SECONDS = 1.0
 last_action = "None"
 last_action_at = "Never"
 active_ws_connections = 0
@@ -216,6 +218,8 @@ PAGE_TEMPLATE = """
           if (typeof payload.active_ws_connections === "number") {
             countEl.textContent = payload.active_ws_connections;
           }
+        } else if (payload.error) {
+          setStatus(payload.error);
         }
       } catch {
         // Ignore malformed payloads from development changes.
@@ -234,6 +238,12 @@ PAGE_TEMPLATE = """
           setStatus("Not connected");
           return;
         }
+
+        button.disabled = true;
+        setTimeout(() => {
+          button.disabled = false;
+        }, 1000);
+
         ws.send(JSON.stringify({ direction: button.dataset.direction }));
       });
     });
@@ -284,38 +294,58 @@ def _state_payload() -> dict[str, object]:
 
 @sock.route("/ws")
 def ws_controls(ws) -> None:
-    global active_ws_connections
+  global active_ws_connections
+  cooldown_by_direction: dict[str, float] = {}
 
+  with state_lock:
+    active_ws_connections += 1
+  ws.send(json.dumps(_state_payload()))
+
+  try:
+    while True:
+      message = ws.receive()
+      if message is None:
+        break
+
+      try:
+        payload = json.loads(message)
+      except json.JSONDecodeError:
+        ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
+        continue
+
+      if payload.get("type") == "status":
+        ws.send(json.dumps(_state_payload()))
+        continue
+
+      direction = str(payload.get("direction", ""))
+      if direction in ALLOWED_DIRECTIONS:
+        now = monotonic()
+        last_press = cooldown_by_direction.get(direction, 0.0)
+        elapsed = now - last_press
+        if elapsed < COOLDOWN_SECONDS:
+          ws.send(
+            json.dumps(
+              {
+                "ok": False,
+                "error": (
+                  f"{direction.capitalize()} is on cooldown. "
+                  f"Try again in {COOLDOWN_SECONDS - elapsed:.2f}s"
+                ),
+              }
+            )
+          )
+          continue
+
+      ok, error = _apply_direction(direction)
+      if not ok:
+        ws.send(json.dumps({"ok": False, "error": error}))
+        continue
+
+      cooldown_by_direction[direction] = monotonic()
+      ws.send(json.dumps(_state_payload()))
+  finally:
     with state_lock:
-        active_ws_connections += 1
-    ws.send(json.dumps(_state_payload()))
-
-    try:
-        while True:
-            message = ws.receive()
-            if message is None:
-                break
-
-            try:
-                payload = json.loads(message)
-            except json.JSONDecodeError:
-                ws.send(json.dumps({"ok": False, "error": "Invalid JSON"}))
-                continue
-
-            if payload.get("type") == "status":
-                ws.send(json.dumps(_state_payload()))
-                continue
-
-            direction = str(payload.get("direction", ""))
-            ok, error = _apply_direction(direction)
-            if not ok:
-                ws.send(json.dumps({"ok": False, "error": error}))
-                continue
-
-            ws.send(json.dumps(_state_payload()))
-    finally:
-        with state_lock:
-            active_ws_connections = max(0, active_ws_connections - 1)
+      active_ws_connections = max(0, active_ws_connections - 1)
 
 
 if __name__ == "__main__":
