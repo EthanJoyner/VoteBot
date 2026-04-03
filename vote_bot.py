@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from time import monotonic, time
 from typing import Dict, Set
@@ -23,7 +24,20 @@ VOTE_INTERVAL_SECONDS = 5.0
 # Shared async state
 # =========================
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    worker_task = asyncio.create_task(vote_interval_worker())
+    try:
+        yield
+    finally:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(lifespan=lifespan)
 
 state_lock = asyncio.Lock()
 
@@ -196,14 +210,6 @@ async def ws_controls(ws: WebSocket):
 async def index():
     with open("page.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
-
-# =========================
-# Startup
-# =========================
-
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(vote_interval_worker())
 
 # =========================
 # Entry point
