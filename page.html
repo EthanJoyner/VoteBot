@@ -10,10 +10,10 @@
       --bg-b: #dceaff;
       --ink: #122847;
       --muted: #4e6180;
-      --accent: #ff8f1f;
-      --accent-2: #e17100;
+      --accent: #2e84ec;
+      --accent-2: #1b63ba;
       --card: rgba(255, 255, 255, 0.9);
-      --ring: rgba(255, 143, 31, 0.35);
+      --ring: rgba(46, 132, 236, 0.35);
     }
 
     * { box-sizing: border-box; }
@@ -27,7 +27,7 @@
       color: var(--ink);
       background:
         radial-gradient(circle at 15% 10%, rgba(27, 101, 198, 0.20), transparent 40%),
-        radial-gradient(circle at 85% 90%, rgba(255, 143, 31, 0.22), transparent 45%),
+        radial-gradient(circle at 85% 90%, rgba(82, 148, 236, 0.24), transparent 45%),
         linear-gradient(135deg, var(--bg-a), var(--bg-b));
       padding: 24px;
     }
@@ -66,7 +66,7 @@
       overflow: hidden;
       background:
         radial-gradient(circle at 15% 20%, rgba(82, 148, 236, 0.35), transparent 35%),
-        radial-gradient(circle at 80% 82%, rgba(255, 143, 31, 0.35), transparent 40%),
+        radial-gradient(circle at 80% 82%, rgba(116, 170, 242, 0.35), transparent 40%),
         linear-gradient(145deg, #0f2a4d, #122847 45%, #173a66);
       transition: opacity 520ms ease, visibility 520ms ease;
       opacity: 1;
@@ -166,24 +166,24 @@
       letter-spacing: 0.01em;
       color: #ffffff;
       background: linear-gradient(180deg, var(--accent), var(--accent-2));
-      box-shadow: 0 10px 18px rgba(225, 113, 0, 0.28);
+      box-shadow: 0 10px 18px rgba(27, 99, 186, 0.28);
       transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
       outline: none;
     }
 
     button:hover {
       transform: translateY(-2px);
-      box-shadow: 0 14px 24px rgba(225, 113, 0, 0.34);
+      box-shadow: 0 14px 24px rgba(27, 99, 186, 0.34);
       filter: saturate(1.05);
     }
 
     button:active {
       transform: translateY(0);
-      box-shadow: 0 6px 12px rgba(225, 113, 0, 0.24);
+      box-shadow: 0 6px 12px rgba(27, 99, 186, 0.24);
     }
 
     button:focus-visible {
-      box-shadow: 0 0 0 4px var(--ring), 0 10px 18px rgba(225, 113, 0, 0.26);
+      box-shadow: 0 0 0 4px var(--ring), 0 10px 18px rgba(27, 99, 186, 0.26);
     }
 
     .hint {
@@ -209,8 +209,8 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #ff8f1f;
-      box-shadow: 0 0 0 4px rgba(255, 143, 31, 0.22);
+      background: #2e84ec;
+      box-shadow: 0 0 0 4px rgba(46, 132, 236, 0.22);
     }
 
     .tally-wrap {
@@ -237,8 +237,8 @@
       height: 100%;
       width: 0%;
       border-radius: 999px;
-      background: linear-gradient(90deg, #ff8f1f, #e17100);
-      box-shadow: 0 2px 10px rgba(225, 113, 0, 0.35);
+      background: linear-gradient(90deg, #2e84ec, #1b63ba);
+      box-shadow: 0 2px 10px rgba(27, 99, 186, 0.35);
       transition: width 90ms linear;
     }
 
@@ -272,14 +272,14 @@
 <body>
   <section class="stinger" id="welcome-stinger" aria-label="Welcome animation">
     <div>
-      <h2 class="stinger-title">Welcome Player!</h2>
+      <h2 class="stinger-title">Welcome Blue Team Player!</h2>
       <p class="stinger-subtitle">Leadership without teamwork lacks effectiveness</p>
     </div>
   </section>
 
   <main class="control-shell" id="control-shell">
     <div class="panel">
-    <h1>VoteBot Direction Controls</h1>
+    <h1>Blue Team - Vote Controls</h1>
     <p class="status">
       Last action: <strong>{{ last_action }}</strong>
       <br>
