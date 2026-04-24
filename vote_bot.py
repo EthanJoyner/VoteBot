@@ -6,7 +6,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from time import monotonic, time
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -42,6 +42,7 @@ app = FastAPI(lifespan=lifespan)
 state_lock = asyncio.Lock()
 
 connected_clients: Set[WebSocket] = set()
+robot_clients: Set[WebSocket] = set()
 interval_votes: Dict[str, int] = {d: 0 for d in ALLOWED_DIRECTIONS}
 
 last_action = "None"
@@ -87,24 +88,25 @@ async def state_payload() -> dict:
             "last_action": last_action,
             "last_action_at": last_action_at,
             "active_ws_connections": len(connected_clients),
+            "active_robot_connections": len(robot_clients),
             "interval_result": interval_result,
             "next_tally_at_epoch_ms": int(next_tally_at_epoch * 1000),
         }
 
-async def broadcast(payload: dict) -> None:
-    """Optimized async fan‑out broadcast."""
+async def _broadcast_to_clients(payload: dict, clients: Set[WebSocket]) -> None:
+    """Optimized async fan-out broadcast for an arbitrary client set."""
     serialized = json.dumps(payload)
 
     async with state_lock:
-        clients = list(connected_clients)
+        targets = list(clients)
 
-    if not clients:
+    if not targets:
         return
 
     coros = []
     dead = []
 
-    for ws in clients:
+    for ws in targets:
         coros.append(_safe_send(ws, serialized, dead))
 
     await asyncio.gather(*coros, return_exceptions=True)
@@ -112,7 +114,27 @@ async def broadcast(payload: dict) -> None:
     if dead:
         async with state_lock:
             for ws in dead:
-                connected_clients.discard(ws)
+                clients.discard(ws)
+
+async def broadcast_state() -> None:
+    await _broadcast_to_clients(await state_payload(), connected_clients)
+
+async def send_robot_command(direction: str, duration_ms: int = 500) -> bool:
+    payload = {
+        "type": "robot_command",
+        "direction": direction,
+        "duration_ms": duration_ms,
+        "issued_at": _stamp(),
+    }
+
+    async with state_lock:
+        has_robot_clients = bool(robot_clients)
+
+    if not has_robot_clients:
+        return False
+
+    await _broadcast_to_clients(payload, robot_clients)
+    return True
 
 async def _safe_send(ws: WebSocket, data: str, dead: list) -> None:
     try:
@@ -134,6 +156,7 @@ async def evaluate_interval_votes() -> None:
         next_tally_at_epoch = time() + VOTE_INTERVAL_SECONDS
 
     highest = max(snapshot.values(), default=0)
+    winning_direction: Optional[str] = None
 
     if highest == 0:
         interval_result = "No votes this interval. No action can be taken."
@@ -142,9 +165,17 @@ async def evaluate_interval_votes() -> None:
         if len(winners) > 1:
             interval_result = f"Tie at {highest} vote(s): {', '.join(sorted(winners))}."
         else:
-            interval_result = f"{winners[0].capitalize()} won with {highest} vote(s)."
+            winning_direction = winners[0]
+            interval_result = f"{winning_direction.capitalize()} won with {highest} vote(s)."
 
-    await broadcast(await state_payload())
+    if winning_direction is not None:
+        sent = await send_robot_command(winning_direction)
+        if sent:
+            interval_result += " Command sent to robot."
+        else:
+            interval_result += " No robot connected; command not delivered."
+
+    await broadcast_state()
 
 async def vote_interval_worker() -> None:
     while True:
@@ -170,7 +201,11 @@ async def ws_controls(ws: WebSocket):
     try:
         while True:
             message = await ws.receive_text()
-            payload = json.loads(message)
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                await ws.send_text(json.dumps({"ok": False, "error": "Invalid JSON"}))
+                continue
 
             if payload.get("type") == "status":
                 await ws.send_text(json.dumps(await state_payload()))
@@ -194,13 +229,44 @@ async def ws_controls(ws: WebSocket):
 
             cooldown[direction] = now
 
-            await broadcast(await state_payload())
+            await broadcast_state()
 
     except WebSocketDisconnect:
         pass
     finally:
         async with state_lock:
             connected_clients.discard(ws)
+
+
+@app.websocket("/ws/robot")
+async def ws_robot(ws: WebSocket):
+    await ws.accept()
+
+    async with state_lock:
+        robot_clients.add(ws)
+
+    await ws.send_text(json.dumps({"ok": True, "type": "robot_connected"}))
+    await ws.send_text(json.dumps(await state_payload()))
+
+    await broadcast_state()
+
+    try:
+        while True:
+            message = await ws.receive_text()
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+
+            if payload.get("type") == "status":
+                await ws.send_text(json.dumps(await state_payload()))
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        async with state_lock:
+            robot_clients.discard(ws)
+        await broadcast_state()
 
 # =========================
 # HTTP endpoint
