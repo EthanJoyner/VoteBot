@@ -4,9 +4,9 @@
 #include <ArduinoJson.h>
 
 // -------------------- WIFI / WS CONFIG --------------------
-const char* WIFI_SSID = "EVA-01 wifi";
-const char* WIFI_PASSWORD = "noVillianArc";
-const char* WS_HOST = "10.246.20.157";
+const char* WIFI_SSID = "VOTE_BOT_BLUE";
+const char* WIFI_PASSWORD = "VOTEBOT-8";
+const char* WS_HOST = "192.168.1.2";
 const uint16_t WS_PORT = 5000;
 const char* WS_PATH = "/ws/robot";
 
@@ -126,11 +126,11 @@ void stop(int ms_delay) {
   delay(ms_delay);
 }
 
-void executeDirection(const String& direction, int durationMs) {
-  if (direction == "forward") forward(durationMs);
-  else if (direction == "backward") backward(durationMs);
-  else if (direction == "left") left(durationMs);
-  else if (direction == "right") right(durationMs);
+void executeDirection(const String& direction) {
+  if (direction == "forward") forward(1500);
+  else if (direction == "backward") backward(1500);
+  else if (direction == "left") left(500);
+  else if (direction == "right") right(500);
   else if (direction == "stop") stop(100);
   else {
     Serial.print("Unknown robot direction: ");
@@ -154,7 +154,7 @@ void handleRobotMessage(const char* message) {
 
   const char* directionValue = doc["direction"] | "";
   String direction = String(directionValue);
-  int durationMs = doc["duration_ms"] | 500;
+  int durationMs = doc["duration_ms"] | 1500;
 
   Serial.print("Executing direction: ");
   Serial.print(direction);
@@ -162,7 +162,7 @@ void handleRobotMessage(const char* message) {
   Serial.print(durationMs);
   Serial.println("ms");
 
-  executeDirection(direction, durationMs);
+  executeDirection(direction);
 }
 
 void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
